@@ -26,7 +26,7 @@ components/
 lib/
   analyzeWallet.ts              # Core analytics processing layer
   cache.ts                      # In-memory cache utilities
-  helius.ts                     # Helius API client + pagination
+  helius.ts                     # Helius RPC + enhanced tx client
   types.ts                      # Shared types
 .env.local.example              # Environment variable template
 README.md
@@ -45,6 +45,14 @@ cp .env.local.example .env.local
 
 ```env
 HELIUS_API_KEY=your_api_key_here
+```
+
+3. (Optional) Add an explicit RPC URL if needed. If omitted, the app defaults to:
+
+`https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`
+
+```env
+HELIUS_RPC_URL=https://mainnet.helius-rpc.com/?api-key=your_api_key_here
 ```
 
 ## Run Locally
@@ -81,8 +89,9 @@ Then open: `http://localhost:3000`
 
 ## Notes
 
+- The backend fetches wallet signatures through Helius RPC (`getSignaturesForAddress`) with pagination.
+- It then fetches parsed enhanced transactions in batches from Helius for efficient swap detection.
 - The backend only counts transactions with `type === "SWAP"`.
 - For each swap, token mints are extracted from `tokenTransfers`.
 - A swap contributes to `total_swap_transactions` if at least one mint in that transaction ends with `BAGS`.
 - Caching TTL is currently 3 minutes for both raw transactions and analytics output.
-- Pagination is bounded for efficiency (`limit=100`, up to 10 pages per request).

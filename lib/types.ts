@@ -14,3 +14,7 @@ export type WalletAnalytics = {
   total_swap_transactions: number;
   tokens: string[];
 };
+
+export type RpcSignatureInfo = {
+  signature: string;
+};
