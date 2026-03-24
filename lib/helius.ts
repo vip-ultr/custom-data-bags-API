@@ -18,7 +18,16 @@ function getHeliusApiKey(): string {
 
 function getHeliusRpcUrl(): string {
   const apiKey = getHeliusApiKey();
-  return process.env.HELIUS_RPC_URL ?? `https://mainnet.helius-rpc.com/?api-key=${apiKey}`;
+  const configured = process.env.HELIUS_RPC_URL ?? 'https://mainnet.helius-rpc.com/';
+
+  const url = new URL(configured);
+  const existingKey = url.searchParams.get('api-key');
+
+  if (!existingKey) {
+    url.searchParams.set('api-key', apiKey);
+  }
+
+  return url.toString();
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -32,23 +41,33 @@ function shouldRetry(status: number): boolean {
 }
 
 async function fetchWithRetry(url: string, init: RequestInit, purpose: string): Promise<Response> {
+  let lastError: unknown;
+
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt += 1) {
-    const response = await fetch(url, init);
+    try {
+      const response = await fetch(url, init);
 
-    if (response.ok) {
-      return response;
-    }
+      if (response.ok) {
+        return response;
+      }
 
-    if (!shouldRetry(response.status) || attempt === MAX_RETRIES) {
-      const text = await response.text();
-      throw new Error(`${purpose} failed (${response.status}): ${text}`);
+      if (!shouldRetry(response.status) || attempt === MAX_RETRIES) {
+        const text = await response.text();
+        throw new Error(`${purpose} failed (${response.status}): ${text}`);
+      }
+    } catch (error) {
+      lastError = error;
+      if (attempt === MAX_RETRIES) {
+        break;
+      }
     }
 
     const delay = BASE_DELAY_MS * 2 ** attempt;
     await sleep(delay);
   }
 
-  throw new Error(`${purpose} failed after retries.`);
+  const message = lastError instanceof Error ? lastError.message : 'Unknown network error';
+  throw new Error(`${purpose} failed after retries: ${message}`);
 }
 
 async function rpcRequest<T>(method: string, params: unknown[]): Promise<T> {
@@ -65,7 +84,7 @@ async function rpcRequest<T>(method: string, params: unknown[]): Promise<T> {
         method,
         params
       }),
-      next: { revalidate: 0 }
+      cache: 'no-store'
     },
     'Helius RPC request'
   );
@@ -115,7 +134,7 @@ async function fetchSignatures(wallet: string): Promise<string[]> {
   return signatures;
 }
 
-async function fetchEnhancedTransactions(signatures: string[], apiKey: string): Promise<HeliusEnhancedTransaction[]> {
+async function fetchEnhancedTransactionsBySignatures(signatures: string[], apiKey: string): Promise<HeliusEnhancedTransaction[]> {
   if (signatures.length === 0) {
     return [];
   }
@@ -134,7 +153,7 @@ async function fetchEnhancedTransactions(signatures: string[], apiKey: string): 
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({ transactions: chunk }),
-        next: { revalidate: 0 }
+        cache: 'no-store'
       },
       'Helius enhanced transaction fetch'
     );
@@ -148,6 +167,52 @@ async function fetchEnhancedTransactions(signatures: string[], apiKey: string): 
   return allTransactions;
 }
 
+async function fetchEnhancedTransactionsByAddress(wallet: string, apiKey: string): Promise<HeliusEnhancedTransaction[]> {
+  const allTransactions: HeliusEnhancedTransaction[] = [];
+  let before: string | undefined;
+
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const url = new URL(`https://api.helius.xyz/v0/addresses/${wallet}/transactions`);
+    url.searchParams.set('api-key', apiKey);
+    url.searchParams.set('limit', String(SIGNATURE_PAGE_LIMIT));
+    if (before) {
+      url.searchParams.set('before', before);
+    }
+
+    const response = await fetchWithRetry(
+      url.toString(),
+      {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        cache: 'no-store'
+      },
+      'Helius enhanced address transaction fetch'
+    );
+
+    const batch = (await response.json()) as HeliusEnhancedTransaction[];
+    if (!Array.isArray(batch) || batch.length === 0) {
+      break;
+    }
+
+    allTransactions.push(...batch);
+
+    if (batch.length < SIGNATURE_PAGE_LIMIT) {
+      break;
+    }
+
+    const lastSignature = batch[batch.length - 1]?.signature;
+    if (!lastSignature) {
+      break;
+    }
+
+    before = lastSignature;
+  }
+
+  return allTransactions;
+}
+
 export async function fetchWalletTransactions(wallet: string): Promise<HeliusEnhancedTransaction[]> {
   const cacheKey = `tx:${wallet}`;
   const cached = getCache<HeliusEnhancedTransaction[]>(cacheKey);
@@ -156,10 +221,15 @@ export async function fetchWalletTransactions(wallet: string): Promise<HeliusEnh
   }
 
   const apiKey = getHeliusApiKey();
-  const signatures = await fetchSignatures(wallet);
 
-  const uniqueSignatures = Array.from(new Set(signatures));
-  const transactions = await fetchEnhancedTransactions(uniqueSignatures, apiKey);
+  let transactions: HeliusEnhancedTransaction[] = [];
+  try {
+    const signatures = await fetchSignatures(wallet);
+    const uniqueSignatures = Array.from(new Set(signatures));
+    transactions = await fetchEnhancedTransactionsBySignatures(uniqueSignatures, apiKey);
+  } catch {
+    transactions = await fetchEnhancedTransactionsByAddress(wallet, apiKey);
+  }
 
   setCache(cacheKey, transactions, TRANSACTION_CACHE_TTL_MS);
 
