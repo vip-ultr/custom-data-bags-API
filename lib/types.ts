@@ -6,6 +6,9 @@ export type HeliusEnhancedTransaction = {
   signature?: string;
   type?: string;
   tokenTransfers?: HeliusTokenTransfer[];
+  events?: {
+    swap?: Record<string, unknown>;
+  };
 };
 
 export type WalletAnalytics = {

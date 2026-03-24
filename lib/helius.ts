@@ -5,6 +5,8 @@ const SIGNATURE_PAGE_LIMIT = 100;
 const MAX_PAGES = 15;
 const SIGNATURE_BATCH_SIZE = 100;
 const TRANSACTION_CACHE_TTL_MS = 3 * 60 * 1000;
+const MAX_RETRIES = 5;
+const BASE_DELAY_MS = 300;
 
 function getHeliusApiKey(): string {
   const apiKey = process.env.HELIUS_API_KEY;
@@ -19,25 +21,54 @@ function getHeliusRpcUrl(): string {
   return process.env.HELIUS_RPC_URL ?? `https://mainnet.helius-rpc.com/?api-key=${apiKey}`;
 }
 
-async function rpcRequest<T>(method: string, params: unknown[]): Promise<T> {
-  const response = await fetch(getHeliusRpcUrl(), {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      id: 1,
-      method,
-      params
-    }),
-    next: { revalidate: 0 }
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
   });
+}
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Helius RPC failed (${response.status}): ${text}`);
+function shouldRetry(status: number): boolean {
+  return status === 429 || status >= 500;
+}
+
+async function fetchWithRetry(url: string, init: RequestInit, purpose: string): Promise<Response> {
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt += 1) {
+    const response = await fetch(url, init);
+
+    if (response.ok) {
+      return response;
+    }
+
+    if (!shouldRetry(response.status) || attempt === MAX_RETRIES) {
+      const text = await response.text();
+      throw new Error(`${purpose} failed (${response.status}): ${text}`);
+    }
+
+    const delay = BASE_DELAY_MS * 2 ** attempt;
+    await sleep(delay);
   }
+
+  throw new Error(`${purpose} failed after retries.`);
+}
+
+async function rpcRequest<T>(method: string, params: unknown[]): Promise<T> {
+  const response = await fetchWithRetry(
+    getHeliusRpcUrl(),
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method,
+        params
+      }),
+      next: { revalidate: 0 }
+    },
+    'Helius RPC request'
+  );
 
   const payload = (await response.json()) as { error?: { message?: string }; result?: T };
   if (payload.error) {
@@ -52,7 +83,14 @@ async function fetchSignatures(wallet: string): Promise<string[]> {
   let before: string | undefined;
 
   for (let page = 0; page < MAX_PAGES; page += 1) {
-    const batch = await rpcRequest<RpcSignatureInfo[]>('getSignaturesForAddress', [wallet, { limit: SIGNATURE_PAGE_LIMIT, before }]);
+    const batch = await rpcRequest<RpcSignatureInfo[]>('getSignaturesForAddress', [
+      wallet,
+      {
+        limit: SIGNATURE_PAGE_LIMIT,
+        before,
+        commitment: 'confirmed'
+      }
+    ]);
 
     if (!Array.isArray(batch) || batch.length === 0) {
       break;
@@ -88,19 +126,18 @@ async function fetchEnhancedTransactions(signatures: string[], apiKey: string): 
     const chunk = signatures.slice(i, i + SIGNATURE_BATCH_SIZE);
     const url = `https://api.helius.xyz/v0/transactions/?api-key=${apiKey}`;
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
+    const response = await fetchWithRetry(
+      url,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ transactions: chunk }),
+        next: { revalidate: 0 }
       },
-      body: JSON.stringify({ transactions: chunk }),
-      next: { revalidate: 0 }
-    });
-
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`Helius enhanced transaction fetch failed (${response.status}): ${text}`);
-    }
+      'Helius enhanced transaction fetch'
+    );
 
     const batch = (await response.json()) as HeliusEnhancedTransaction[];
     if (Array.isArray(batch) && batch.length > 0) {

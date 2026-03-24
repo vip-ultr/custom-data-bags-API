@@ -5,7 +5,7 @@ import type { HeliusEnhancedTransaction, WalletAnalytics } from '@/lib/types';
 const ANALYTICS_CACHE_TTL_MS = 3 * 60 * 1000;
 
 function isSwapTransaction(tx: HeliusEnhancedTransaction): boolean {
-  return tx.type === 'SWAP';
+  return tx.type === 'SWAP' || Boolean(tx.events?.swap);
 }
 
 function mintMatchesBagsSuffix(mint: string): boolean {
