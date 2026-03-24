@@ -1,6 +1,6 @@
 # Solana Wallet BAGS Analyzer
 
-A complete full-stack Next.js application that analyzes Solana wallet swap activity through Helius and reports interactions with token mint addresses ending in `BAGS`.
+A complete full-stack Next.js application that analyzes Solana wallet swap activity through the Helius API and reports interactions with token mint addresses ending in `BAGS`.
 
 ## Features
 
@@ -13,7 +13,7 @@ A complete full-stack Next.js application that analyzes Solana wallet swap activ
   - total swap transactions involving BAGS mints
   - matching token mint list
 - In-memory caching for transaction payloads and computed analytics
-- Signature pagination + batched enhanced transaction fetching
+- Transaction pagination support
 
 ## Project Structure
 
