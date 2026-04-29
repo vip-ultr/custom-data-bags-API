@@ -96,3 +96,4 @@ Then open: `http://localhost:3000`
 - For each swap, token mints are extracted from `tokenTransfers`.
 - A swap contributes to `total_swap_transactions` if at least one mint in that transaction ends with `BAGS`.
 - Caching TTL is currently 3 minutes for both raw transactions and analytics output.
+# Updated at Wed Apr 29 08:14:58 UTC 2026
