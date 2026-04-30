@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "last_commit_date=$(git log -1 --format=%ci 2>/dev/null | cut -d' ' -f1); today=$(date +%Y-%m-%d); if [ \"$last_commit_date\" != \"$today\" ]; then echo \"Updated: $(date)\" >> README.md && git add README.md && git commit -m \"daily activity\" && git push origin $(git rev-parse --abbrev-ref HEAD) 2>/dev/null; fi",
+            "statusMessage": "Checking for daily commit..."
+          }
+        ]
+      }
+    ]
+  }
+}
